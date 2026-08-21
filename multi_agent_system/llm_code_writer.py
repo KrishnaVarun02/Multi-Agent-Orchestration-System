@@ -16,17 +16,16 @@ MAX_REPLACEMENT_CHARS = 4_000
 
 
 class FileEdit(BaseModel):
-    """One exact search-and-replace operation proposed by the model."""
+    """One bounded line-range replacement proposed by the model."""
 
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(description="Exact path from the selected-files list")
-    old_text: str = Field(
-        min_length=1,
-        description="Exact existing text copied from the supplied code context",
-    )
-    new_text: str = Field(
+    start_line: int = Field(ge=1, description="First numbered line to replace")
+    end_line: int = Field(ge=1, description="Last numbered line to replace")
+    replacement: str = Field(
         description="Concise replacement text",
+        min_length=1,
         max_length=MAX_REPLACEMENT_CHARS,
     )
 
@@ -38,7 +37,7 @@ class PatchOutput(BaseModel):
 
     summary: str = Field(description="A concise summary of the proposed change")
     edits: list[FileEdit] = Field(
-        description="Small exact search-and-replace edits",
+        description="Small bounded line-range replacements",
         min_length=1,
         max_length=MAX_SELECTED_FILES,
     )
@@ -49,6 +48,15 @@ def _patch_messages(
 ) -> list[dict[str, str]]:
     """Build the prompt, making a retry explicitly shorter."""
     selected_files = state["selected_files"]
+    context_sections: list[str] = []
+    for path in selected_files:
+        snippet = state["selected_file_contents"].get(path, "")
+        numbered_lines = "\n".join(
+            f"{number}: {line}"
+            for number, line in enumerate(snippet.splitlines(), start=1)
+        )
+        context_sections.append(f"### {path}\n{numbered_lines}")
+    numbered_context = "\n\n".join(context_sections)
     retry_instruction = ""
     if retry:
         retry_instruction = (
@@ -69,10 +77,10 @@ def _patch_messages(
         {
             "role": "system",
             "content": (
-                "You are a careful software engineer. Return small exact "
-                "search-and-replace edits that follow the plan. Each old_text "
-                "must be copied exactly from the supplied code context and "
-                "must identify one unique location. Change only paths in the "
+                "You are a careful software engineer. Return small line-range "
+                "replacements that follow the plan. start_line and end_line "
+                "are inclusive and must refer to the numbered context. Change "
+                "only paths in the "
                 "selected-files list. Keep replacement text under 40 lines "
                 "and 4000 characters. Prefer concise documentation. Python "
                 "will generate the unified diff, so do not return diff syntax."
@@ -85,7 +93,7 @@ def _patch_messages(
             "content": (
                 f"Issue:\n{state['issue']}\n\n"
                 f"Selected files:\n{chr(10).join(selected_files)}\n\n"
-                f"Code context:\n{state['code_context']}\n\n"
+                f"Numbered code context:\n{numbered_context}\n\n"
                 f"Plan summary:\n{state['plan']}\n\n"
                 "Plan steps:\n- "
                 + "\n- ".join(state.get("plan_steps", []))
@@ -105,30 +113,45 @@ def _build_patch(
     snippets = state["selected_file_contents"]
     repository = Path(state["repo_path"]).resolve()
     originals: dict[str, str] = {}
-    updated: dict[str, str] = {}
+    edits_by_path: dict[str, list[FileEdit]] = {}
 
     for edit in proposal.edits:
         if edit.path not in allowed_files:
             raise ValueError("An edit targets a file outside the selection.")
-        if snippets.get(edit.path, "").count(edit.old_text) != 1:
-            raise ValueError("old_text must appear exactly once in supplied context.")
-        if edit.old_text == edit.new_text:
-            raise ValueError("An edit does not change anything.")
+        snippet_lines = snippets.get(edit.path, "").splitlines(keepends=True)
+        if edit.start_line > edit.end_line:
+            raise ValueError("start_line must not be after end_line.")
+        if edit.end_line > len(snippet_lines):
+            raise ValueError("An edit range exceeds the supplied context.")
+        edits_by_path.setdefault(edit.path, []).append(edit)
 
-        if edit.path not in originals:
-            path = (repository / edit.path).resolve()
-            if repository not in path.parents:
-                raise ValueError("An edit path escapes the repository.")
-            originals[edit.path] = path.read_text(encoding="utf-8")
-            updated[edit.path] = originals[edit.path]
+    updated: dict[str, str] = {}
+    for relative_path, file_edits in edits_by_path.items():
+        path = (repository / relative_path).resolve()
+        if repository not in path.parents:
+            raise ValueError("An edit path escapes the repository.")
+        original = path.read_text(encoding="utf-8")
+        snippet = snippets[relative_path]
+        if not original.startswith(snippet):
+            raise ValueError("The selected context no longer matches the file.")
 
-        if updated[edit.path].count(edit.old_text) != 1:
-            raise ValueError("old_text must identify one current file location.")
-        updated[edit.path] = updated[edit.path].replace(
-            edit.old_text, edit.new_text, 1
+        ordered_edits = sorted(
+            file_edits, key=lambda item: item.start_line, reverse=True
         )
+        for earlier, later in zip(ordered_edits, ordered_edits[1:]):
+            if later.end_line >= earlier.start_line:
+                raise ValueError("Proposed line ranges overlap.")
 
-    changed_files = list(originals)
+        updated_lines = original.splitlines(keepends=True)
+        for edit in ordered_edits:
+            replacement = edit.replacement.rstrip() + "\n"
+            updated_lines[edit.start_line - 1 : edit.end_line] = (
+                replacement.splitlines(keepends=True)
+            )
+        originals[relative_path] = original
+        updated[relative_path] = "".join(updated_lines)
+
+    changed_files = list(edits_by_path)
     diff_sections: list[str] = []
     for path in changed_files:
         if originals[path] == updated[path]:
@@ -180,8 +203,8 @@ def llm_code_writer(state: AgentState) -> AgentState:
                 raise ValueError("The model returned no content.")
             proposal, changed_files, generated_diff = _build_patch(content, state)
             if any(
-                len(edit.new_text) > MAX_REPLACEMENT_CHARS
-                or len(edit.new_text.splitlines()) > 40
+                len(edit.replacement) > MAX_REPLACEMENT_CHARS
+                or len(edit.replacement.splitlines()) > 40
                 for edit in proposal.edits
             ):
                 raise ValueError("Replacement text exceeds the concise edit limit.")

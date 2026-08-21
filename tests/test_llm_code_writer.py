@@ -44,8 +44,9 @@ def valid_patch_json() -> str:
             "edits": [
                 {
                     "path": "app.py",
-                    "old_text": "print('hello')",
-                    "new_text": "print('hi')",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "replacement": "print('hi')",
                 }
             ],
         }
@@ -71,6 +72,8 @@ def test_code_writer_retries_truncated_json(monkeypatch, tmp_path) -> None:
     assert completions.calls == 2
     assert result["code_generation_status"] == "generated"
     assert result["changed_files"] == ["app.py"]
+    assert "-print('hello')" in result["patch"]
+    assert "+print('hi')" in result["patch"]
     retry_prompt = completions.requests[1]["messages"][0]["content"]
     assert "did not match the schema" in retry_prompt
 
