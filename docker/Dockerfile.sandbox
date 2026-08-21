@@ -1,0 +1,12 @@
+FROM python:3.13-slim
+
+WORKDIR /workspace
+
+COPY requirements.txt requirements-dev.txt /tmp/dependencies/
+RUN python -m pip install --no-cache-dir \
+    -r /tmp/dependencies/requirements-dev.txt
+
+RUN useradd --create-home --uid 10001 runner
+USER runner
+
+ENTRYPOINT ["python", "-m", "pytest"]
