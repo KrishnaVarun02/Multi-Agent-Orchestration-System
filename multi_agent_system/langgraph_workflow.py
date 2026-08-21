@@ -39,6 +39,8 @@ class AgentState(TypedDict, total=False):
     test_patch: str
     test_command: str
     tests: str
+    test_generation_status: str
+    test_generation_error: str
     execute_tests: bool
     tests_passed: bool
     test_status: str

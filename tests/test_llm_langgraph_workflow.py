@@ -55,6 +55,8 @@ def fake_test_writer(state: AgentState) -> AgentState:
         "test_patch": test_patch,
         "test_command": "python3 -m pytest",
         "tests": test_patch,
+        "test_generation_status": "generated",
+        "test_generation_error": "",
         "execution_log": ["llm_test_writer"],
     }
 

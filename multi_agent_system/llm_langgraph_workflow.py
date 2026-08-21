@@ -24,7 +24,10 @@ from multi_agent_system.langgraph_workflow import (
 from multi_agent_system.llm_code_reader import llm_code_reader
 from multi_agent_system.llm_code_writer import llm_code_writer, route_after_code_writer
 from multi_agent_system.llm_planner import llm_planner
-from multi_agent_system.llm_test_writer import llm_test_writer
+from multi_agent_system.validated_test_writer import (
+    route_after_test_writer,
+    validated_test_writer,
+)
 from multi_agent_system.repository_reader import index_repository
 from multi_agent_system.sandbox_runner import route_after_tests
 
@@ -43,7 +46,7 @@ def build_llm_graph(
     planner_node: PlannerNode = llm_planner,
     code_reader_node: CodeReaderNode = llm_code_reader,
     code_writer_node: CodeWriterNode = llm_code_writer,
-    test_writer_node: TestWriterNode = llm_test_writer,
+    test_writer_node: TestWriterNode = validated_test_writer,
     test_runner_node: TestRunnerNode = run_patch_in_docker,
     issue_reader_node: IssueReaderNode = load_issue_input,
     approval_node: ApprovalNode = human_approval,
@@ -83,7 +86,11 @@ def build_llm_graph(
         route_after_code_writer,
         {"test_writer": "test_writer", "end": END},
     )
-    builder.add_edge("test_writer", "test_runner")
+    builder.add_conditional_edges(
+        "test_writer",
+        route_after_test_writer,
+        {"test_runner": "test_runner", "end": END},
+    )
     builder.add_conditional_edges(
         "test_runner",
         route_after_tests,

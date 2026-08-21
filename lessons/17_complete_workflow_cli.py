@@ -80,6 +80,9 @@ def print_final_status(state: AgentState) -> None:
         if state.get("code_generation_status") == "failed":
             print("\nWorkflow stopped at code generation:")
             print(state.get("code_generation_error", "Unknown generation error"))
+        elif state.get("test_generation_status") == "failed":
+            print("\nWorkflow stopped at test generation:")
+            print(state.get("test_generation_error", "Unknown generation error"))
         else:
             print(f"\nWorkflow stopped at tests: {state.get('test_status')}")
             print(state.get("test_output", ""))
