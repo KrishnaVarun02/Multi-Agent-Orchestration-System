@@ -12,6 +12,7 @@ from multi_agent_system.repository_reader import MAX_SELECTED_FILES
 
 MAX_PATCH_ATTEMPTS = 2
 MAX_PATCH_OUTPUT_TOKENS = 4_500
+MAX_REPLACEMENT_CHARS = 4_000
 
 
 class FileEdit(BaseModel):
@@ -24,7 +25,10 @@ class FileEdit(BaseModel):
         min_length=1,
         description="Exact existing text copied from the supplied code context",
     )
-    new_text: str = Field(description="Replacement text")
+    new_text: str = Field(
+        description="Concise replacement text",
+        max_length=MAX_REPLACEMENT_CHARS,
+    )
 
 
 class PatchOutput(BaseModel):
@@ -40,14 +44,17 @@ class PatchOutput(BaseModel):
     )
 
 
-def _patch_messages(state: AgentState, retry: bool) -> list[dict[str, str]]:
+def _patch_messages(
+    state: AgentState, retry: bool, failure_reason: str = ""
+) -> list[dict[str, str]]:
     """Build the prompt, making a retry explicitly shorter."""
     selected_files = state["selected_files"]
     retry_instruction = ""
     if retry:
         retry_instruction = (
             " Your previous response was incomplete or invalid. Return a much "
-            "smaller patch and ensure the JSON object is fully closed."
+            "smaller edit and ensure the JSON object is fully closed. "
+            f"Validation feedback: {failure_reason}"
         )
 
     human_feedback = state.get("approval_feedback", "")
@@ -66,7 +73,8 @@ def _patch_messages(state: AgentState, retry: bool) -> list[dict[str, str]]:
                 "search-and-replace edits that follow the plan. Each old_text "
                 "must be copied exactly from the supplied code context and "
                 "must identify one unique location. Change only paths in the "
-                "selected-files list. Never rewrite an entire file. Python "
+                "selected-files list. Keep replacement text under 40 lines "
+                "and 4000 characters. Prefer concise documentation. Python "
                 "will generate the unified diff, so do not return diff syntax."
                 + revision_instruction
                 + retry_instruction
@@ -146,12 +154,15 @@ def llm_code_writer(state: AgentState) -> AgentState:
     """Generate a validated patch proposal without changing files on disk."""
     client, model = get_openrouter_client_and_model()
     selected_files = state["selected_files"]
+    last_failure = "No valid structured edit was returned."
 
     for attempt in range(MAX_PATCH_ATTEMPTS):
         completion = client.chat.completions.create(
             model=model,
             max_tokens=MAX_PATCH_OUTPUT_TOKENS,
-            messages=_patch_messages(state, retry=attempt > 0),
+            messages=_patch_messages(
+                state, retry=attempt > 0, failure_reason=last_failure
+            ),
             response_format={
                 "type": "json_schema",
                 "json_schema": {
@@ -168,7 +179,20 @@ def llm_code_writer(state: AgentState) -> AgentState:
             if not content:
                 raise ValueError("The model returned no content.")
             proposal, changed_files, generated_diff = _build_patch(content, state)
-        except (OSError, UnicodeError, ValidationError, ValueError):
+            if any(
+                len(edit.new_text) > MAX_REPLACEMENT_CHARS
+                or len(edit.new_text.splitlines()) > 40
+                for edit in proposal.edits
+            ):
+                raise ValueError("Replacement text exceeds the concise edit limit.")
+        except ValidationError:
+            last_failure = "The response was incomplete or did not match the schema."
+            continue
+        except (OSError, UnicodeError):
+            last_failure = "A selected file could not be read as text."
+            continue
+        except ValueError as error:
+            last_failure = str(error)
             continue
 
         return {
@@ -186,7 +210,8 @@ def llm_code_writer(state: AgentState) -> AgentState:
         "patch": "",
         "code_generation_status": "failed",
         "code_generation_error": (
-            "OpenRouter returned incomplete or invalid structured output twice."
+            "OpenRouter did not produce a valid edit after two attempts. "
+            f"Last validation result: {last_failure}"
         ),
         "execution_log": ["llm_code_writer"],
     }

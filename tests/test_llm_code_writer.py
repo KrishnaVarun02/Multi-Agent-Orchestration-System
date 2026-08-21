@@ -12,8 +12,10 @@ class FakeCompletions:
     def __init__(self, contents: list[str]):
         self.contents = contents
         self.calls = 0
+        self.requests: list[dict] = []
 
     def create(self, **kwargs):
+        self.requests.append(kwargs)
         content = self.contents[self.calls]
         self.calls += 1
         message = SimpleNamespace(content=content)
@@ -69,6 +71,8 @@ def test_code_writer_retries_truncated_json(monkeypatch, tmp_path) -> None:
     assert completions.calls == 2
     assert result["code_generation_status"] == "generated"
     assert result["changed_files"] == ["app.py"]
+    retry_prompt = completions.requests[1]["messages"][0]["content"]
+    assert "did not match the schema" in retry_prompt
 
 
 def test_code_writer_stops_cleanly_after_two_invalid_responses(
