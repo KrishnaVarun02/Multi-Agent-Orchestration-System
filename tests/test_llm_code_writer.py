@@ -100,3 +100,7 @@ def test_code_writer_stops_cleanly_after_two_invalid_responses(
     assert result["code_generation_status"] == "failed"
     assert result["patch"] == ""
     assert writer_module.route_after_code_writer(result) == "end"
+
+
+def test_replacement_line_limit_allows_concise_documentation() -> None:
+    assert writer_module.MAX_REPLACEMENT_LINES == 80

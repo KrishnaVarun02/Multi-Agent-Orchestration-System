@@ -13,6 +13,7 @@ from multi_agent_system.repository_reader import MAX_SELECTED_FILES
 MAX_PATCH_ATTEMPTS = 2
 MAX_PATCH_OUTPUT_TOKENS = 4_500
 MAX_REPLACEMENT_CHARS = 4_000
+MAX_REPLACEMENT_LINES = 80
 
 
 class FileEdit(BaseModel):
@@ -81,7 +82,7 @@ def _patch_messages(
                 "replacements that follow the plan. start_line and end_line "
                 "are inclusive and must refer to the numbered context. Change "
                 "only paths in the "
-                "selected-files list. Keep replacement text under 40 lines "
+                "selected-files list. Keep replacement text under 80 lines "
                 "and 4000 characters. Prefer concise documentation. Python "
                 "will generate the unified diff, so do not return diff syntax."
                 + revision_instruction
@@ -204,7 +205,7 @@ def llm_code_writer(state: AgentState) -> AgentState:
             proposal, changed_files, generated_diff = _build_patch(content, state)
             if any(
                 len(edit.replacement) > MAX_REPLACEMENT_CHARS
-                or len(edit.replacement.splitlines()) > 40
+                or len(edit.replacement.splitlines()) > MAX_REPLACEMENT_LINES
                 for edit in proposal.edits
             ):
                 raise ValueError("Replacement text exceeds the concise edit limit.")
