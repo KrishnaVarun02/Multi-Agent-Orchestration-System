@@ -14,6 +14,23 @@ from multi_agent_system.repository_reader import (
 )
 
 TEST_TIMEOUT_SECONDS = 30
+MODEL_DIFF_WRAPPERS = {
+    "```",
+    "```diff",
+    "```patch",
+    "*** Begin Patch",
+    "*** End Patch",
+}
+
+
+def normalize_model_diff(diff: str) -> str:
+    """Remove only recognized outer wrappers from a model-generated diff."""
+    lines = diff.strip().splitlines()
+    while lines and lines[0].strip() in MODEL_DIFF_WRAPPERS:
+        lines.pop(0)
+    while lines and lines[-1].strip() in MODEL_DIFF_WRAPPERS:
+        lines.pop()
+    return "\n".join(lines).rstrip() + "\n" if lines else ""
 
 
 def _normalized_diff_path(raw_path: str) -> str | None:
@@ -82,32 +99,34 @@ def prepare_patched_repository(state: AgentState, temp_dir: str) -> Path:
     if not repository.is_dir():
         raise ValueError(f"Repository path is not a directory: {repository}")
 
-    combined_patch = (
-        state["patch"].rstrip() + "\n" + state["test_patch"].lstrip() + "\n"
-    )
     sandbox = Path(temp_dir) / "repository"
     shutil.copytree(repository, sandbox, ignore=_copy_ignore)
-    patch_file = Path(temp_dir) / "proposal.patch"
-    patch_file.write_text(combined_patch, encoding="utf-8")
+    patch_files = [
+        Path(temp_dir) / "code.patch",
+        Path(temp_dir) / "tests.patch",
+    ]
+    patch_files[0].write_text(state["patch"], encoding="utf-8")
+    patch_files[1].write_text(state["test_patch"], encoding="utf-8")
 
-    for command in (
-        ["git", "apply", "--check", str(patch_file)],
-        ["git", "apply", str(patch_file)],
-    ):
-        try:
-            result = subprocess.run(
-                command,
-                cwd=sandbox,
-                capture_output=True,
-                text=True,
-                timeout=TEST_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise ValueError("Git patch operation timed out.") from error
+    for patch_file in patch_files:
+        for arguments in (
+            ["--check", "--recount", str(patch_file)],
+            ["--recount", str(patch_file)],
+        ):
+            try:
+                result = subprocess.run(
+                    ["git", "apply", *arguments],
+                    cwd=sandbox,
+                    capture_output=True,
+                    text=True,
+                    timeout=TEST_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise ValueError("Git patch operation timed out.") from error
 
-        if result.returncode != 0:
-            raise ValueError((result.stderr or result.stdout).strip())
+            if result.returncode != 0:
+                raise ValueError((result.stderr or result.stdout).strip())
 
     return sandbox
 

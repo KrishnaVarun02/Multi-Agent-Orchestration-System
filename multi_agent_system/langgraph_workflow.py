@@ -21,6 +21,7 @@ class AgentState(TypedDict, total=False):
     repo_path: str
     repository_files: list[str]
     selected_files: list[str]
+    selected_file_contents: dict[str, str]
     file_selection_reasoning: str
     code_context: str
     complexity: str
@@ -31,6 +32,8 @@ class AgentState(TypedDict, total=False):
     patch_summary: str
     changed_files: list[str]
     patch: str
+    code_generation_status: str
+    code_generation_error: str
     test_summary: str
     test_files: list[str]
     test_patch: str
@@ -45,10 +48,13 @@ class AgentState(TypedDict, total=False):
     pull_request_approved: bool
     approval_status: str
     approval_feedback: str
+    revision_count: int
     branch_prepared: bool
     branch_name: str
     branch_status: str
     commit_sha: str
+    base_branch: str
+    pr_status: str
     pr_url: str
     execution_log: Annotated[list[str], add]
 

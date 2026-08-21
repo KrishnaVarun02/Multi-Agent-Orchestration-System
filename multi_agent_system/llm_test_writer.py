@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from multi_agent_system.langgraph_workflow import AgentState
 from multi_agent_system.openrouter_client import get_openrouter_client_and_model
 from multi_agent_system.repository_reader import MAX_SELECTED_FILES
+from multi_agent_system.sandbox_runner import normalize_model_diff
 
 
 class TestOutput(BaseModel):
@@ -93,14 +94,15 @@ def llm_test_writer(state: AgentState) -> AgentState:
             "OpenRouter proposed unsafe test paths: " + ", ".join(invalid_paths)
         )
 
-    if not proposal.test_files or not proposal.unified_diff.strip():
+    normalized_diff = normalize_model_diff(proposal.unified_diff)
+    if not proposal.test_files or not normalized_diff:
         raise RuntimeError("OpenRouter returned an empty test proposal.")
 
     return {
         "test_summary": proposal.summary,
         "test_files": proposal.test_files,
-        "test_patch": proposal.unified_diff,
+        "test_patch": normalized_diff,
         "test_command": proposal.suggested_command,
-        "tests": proposal.unified_diff,
+        "tests": normalized_diff,
         "execution_log": ["llm_test_writer"],
     }

@@ -21,6 +21,18 @@ MAX_CHARS_PER_FILE = 3_000
 MAX_TOTAL_CHARS = 20_000
 
 
+def bounded_file_snippet(content: str, character_limit: int) -> tuple[str, bool]:
+    """Truncate at a complete line so the model never sees invented fragments."""
+    if len(content) <= character_limit:
+        return content, False
+
+    prefix = content[:character_limit]
+    last_newline = prefix.rfind("\n")
+    if last_newline == -1:
+        return "", True
+    return prefix[: last_newline + 1], True
+
+
 def should_read_file(path: Path, root: Path) -> bool:
     """Return True only for supported, non-secret repository files."""
     relative_path = path.relative_to(root)
@@ -73,6 +85,7 @@ def read_selected_files(
     }
 
     approved_files: list[str] = []
+    selected_file_contents: dict[str, str] = {}
     context_sections: list[str] = []
     remaining_characters = MAX_TOTAL_CHARS
 
@@ -90,10 +103,14 @@ def read_selected_files(
             continue
 
         character_limit = min(MAX_CHARS_PER_FILE, remaining_characters)
-        snippet = content[:character_limit]
+        snippet, truncated = bounded_file_snippet(content, character_limit)
+        section_title = f"### {relative_path}"
+        if truncated:
+            section_title += " (truncated at a complete line)"
 
         approved_files.append(relative_path)
-        context_sections.append(f"### {relative_path}\n{snippet}")
+        selected_file_contents[relative_path] = snippet
+        context_sections.append(f"{section_title}\n{snippet}")
         remaining_characters -= len(snippet)
 
     code_context = "\n\n".join(context_sections)
@@ -102,6 +119,7 @@ def read_selected_files(
 
     return {
         "selected_files": approved_files,
+        "selected_file_contents": selected_file_contents,
         "code_context": code_context,
     }
 

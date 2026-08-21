@@ -13,16 +13,16 @@ from multi_agent_system.git_branch_preparer import (
     route_after_branch,
 )
 from multi_agent_system.github_issue_reader import load_issue_input
+from multi_agent_system.github_pr_opener import open_github_pull_request
 from multi_agent_system.human_approval import human_approval, route_after_approval
 from multi_agent_system.langgraph_workflow import (
     AgentState,
     classifier,
-    pr_opener,
     researcher,
     route_by_complexity,
 )
 from multi_agent_system.llm_code_reader import llm_code_reader
-from multi_agent_system.llm_code_writer import llm_code_writer
+from multi_agent_system.llm_code_writer import llm_code_writer, route_after_code_writer
 from multi_agent_system.llm_planner import llm_planner
 from multi_agent_system.llm_test_writer import llm_test_writer
 from multi_agent_system.repository_reader import index_repository
@@ -36,6 +36,7 @@ TestRunnerNode = Callable[[AgentState], AgentState]
 IssueReaderNode = Callable[[AgentState], AgentState]
 ApprovalNode = Callable[[AgentState], AgentState]
 BranchPreparerNode = Callable[[AgentState], AgentState]
+PrOpenerNode = Callable[[AgentState], AgentState]
 
 
 def build_llm_graph(
@@ -47,6 +48,7 @@ def build_llm_graph(
     issue_reader_node: IssueReaderNode = load_issue_input,
     approval_node: ApprovalNode = human_approval,
     branch_preparer_node: BranchPreparerNode = prepare_local_branch,
+    pr_opener_node: PrOpenerNode = open_github_pull_request,
     checkpointer=None,
 ):
     """Build a graph whose LLM nodes can be replaced during tests."""
@@ -63,7 +65,7 @@ def build_llm_graph(
     builder.add_node("test_runner", test_runner_node)
     builder.add_node("human_approval", approval_node)
     builder.add_node("branch_preparer", branch_preparer_node)
-    builder.add_node("pr_opener", pr_opener)
+    builder.add_node("pr_opener", pr_opener_node)
 
     builder.add_edge(START, "issue_reader")
     builder.add_edge("issue_reader", "repository_indexer")
@@ -76,7 +78,11 @@ def build_llm_graph(
     )
     builder.add_edge("researcher", "planner")
     builder.add_edge("planner", "code_writer")
-    builder.add_edge("code_writer", "test_writer")
+    builder.add_conditional_edges(
+        "code_writer",
+        route_after_code_writer,
+        {"test_writer": "test_writer", "end": END},
+    )
     builder.add_edge("test_writer", "test_runner")
     builder.add_conditional_edges(
         "test_runner",
@@ -86,7 +92,11 @@ def build_llm_graph(
     builder.add_conditional_edges(
         "human_approval",
         route_after_approval,
-        {"branch_preparer": "branch_preparer", "end": END},
+        {
+            "branch_preparer": "branch_preparer",
+            "revise": "code_writer",
+            "end": END,
+        },
     )
     builder.add_conditional_edges(
         "branch_preparer",
@@ -200,11 +210,12 @@ def main() -> None:
     print(result["test_status"])
     print(result["test_output"])
 
-    if "pr_url" in result:
-        print("\nFinal simulated PR URL:")
+    if result.get("pr_url"):
+        print("\nPull request URL:")
         print(result["pr_url"])
     else:
-        print("\nPR creation skipped because tests were not approved or passed.")
+        print("\nPR creation status:")
+        print(result.get("pr_status", "not reached"))
 
 
 if __name__ == "__main__":

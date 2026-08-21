@@ -3,10 +3,28 @@
 from pathlib import Path
 
 from multi_agent_system.repository_reader import (
+    bounded_file_snippet,
     index_repository,
     read_repository,
     read_selected_files,
 )
+
+
+def test_bounded_snippet_never_returns_a_partial_line() -> None:
+    content = "first line\nsecond line is longer\nthird line\n"
+
+    snippet, truncated = bounded_file_snippet(content, 24)
+
+    assert truncated is True
+    assert snippet == "first line\n"
+    assert "second line" not in snippet
+
+
+def test_bounded_snippet_keeps_complete_short_content() -> None:
+    snippet, truncated = bounded_file_snippet("first\nsecond\n", 100)
+
+    assert truncated is False
+    assert snippet == "first\nsecond\n"
 
 
 def test_reader_includes_source_and_ignores_secrets(tmp_path: Path) -> None:
@@ -52,5 +70,6 @@ def test_loader_reads_only_valid_indexed_paths(tmp_path: Path) -> None:
 
     assert indexed["repository_files"] == ["app.py"]
     assert updates["selected_files"] == ["app.py"]
+    assert updates["selected_file_contents"] == {"app.py": "SAFE_CONTENT"}
     assert "SAFE_CONTENT" in updates["code_context"]
     assert "SECRET_CONTENT" not in updates["code_context"]

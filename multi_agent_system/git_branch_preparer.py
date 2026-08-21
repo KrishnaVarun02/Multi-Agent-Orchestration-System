@@ -103,16 +103,17 @@ def prepare_local_branch(state: AgentState) -> AgentState:
             prepared=False, branch=branch, status="patch_rejected"
         )
 
-    combined_patch = (
-        state["patch"].rstrip() + "\n" + state["test_patch"].lstrip() + "\n"
-    )
     worktree_added = False
     prepared = False
 
     with tempfile.TemporaryDirectory(prefix="multi-agent-branch-") as temp_dir:
         worktree = Path(temp_dir) / "worktree"
-        patch_file = Path(temp_dir) / "approved.patch"
-        patch_file.write_text(combined_patch, encoding="utf-8")
+        patch_files = [
+            Path(temp_dir) / "approved-code.patch",
+            Path(temp_dir) / "approved-tests.patch",
+        ]
+        patch_files[0].write_text(state["patch"], encoding="utf-8")
+        patch_files[1].write_text(state["test_patch"], encoding="utf-8")
 
         try:
             _run_git(
@@ -120,8 +121,14 @@ def prepare_local_branch(state: AgentState) -> AgentState:
                 ["worktree", "add", "-b", branch, str(worktree), "HEAD"],
             )
             worktree_added = True
-            _run_git(worktree, ["apply", "--check", str(patch_file)])
-            _run_git(worktree, ["apply", str(patch_file)])
+            for patch_file in patch_files:
+                _run_git(
+                    worktree,
+                    ["apply", "--check", "--recount", str(patch_file)],
+                )
+                _run_git(
+                    worktree, ["apply", "--recount", str(patch_file)]
+                )
 
             approved_paths = list(
                 dict.fromkeys(state["changed_files"] + state["test_files"])

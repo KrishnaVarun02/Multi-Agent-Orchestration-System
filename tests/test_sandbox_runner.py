@@ -5,9 +5,30 @@ from pathlib import Path
 import pytest
 
 from multi_agent_system.sandbox_runner import (
+    normalize_model_diff,
     run_patch_in_sandbox,
     validate_unified_diff,
 )
+
+
+def test_known_model_wrappers_are_removed_from_diff_edges() -> None:
+    wrapped = (
+        "*** Begin Patch\n--- a/app.py\n+++ b/app.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n*** End Patch\n"
+    )
+
+    assert normalize_model_diff(wrapped) == (
+        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    )
+
+
+def test_wrapper_like_text_inside_diff_is_not_removed() -> None:
+    diff = (
+        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+        "-old\n+*** End Patch\n"
+    )
+
+    assert normalize_model_diff(diff) == diff
 
 
 def test_unapproved_patch_path_is_rejected() -> None:

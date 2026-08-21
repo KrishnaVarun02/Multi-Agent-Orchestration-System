@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from multi_agent_system.human_approval import human_approval
+from multi_agent_system.human_approval import human_approval, route_after_approval
 from multi_agent_system.langgraph_workflow import AgentState
 
 
@@ -57,4 +57,25 @@ def test_rejection_is_recorded() -> None:
         config=config,
     )
     assert resumed["pull_request_approved"] is False
-    assert resumed["approval_status"] == "rejected"
+    assert resumed["approval_status"] == "revision_requested"
+    assert resumed["revision_count"] == 1
+
+
+def test_rejection_with_feedback_requests_bounded_revision() -> None:
+    state = {
+        "pull_request_approved": False,
+        "approval_status": "revision_requested",
+        "revision_count": 1,
+    }
+
+    assert route_after_approval(state) == "revise"
+
+
+def test_revision_limit_stops_the_graph() -> None:
+    state = {
+        "pull_request_approved": False,
+        "approval_status": "revision_limit_reached",
+        "revision_count": 3,
+    }
+
+    assert route_after_approval(state) == "end"

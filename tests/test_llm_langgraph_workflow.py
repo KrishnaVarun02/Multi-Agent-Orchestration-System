@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
+
 from multi_agent_system.langgraph_workflow import AgentState
 from multi_agent_system.llm_langgraph_workflow import build_llm_graph
 
@@ -34,6 +37,8 @@ def fake_code_writer(state: AgentState) -> AgentState:
         "patch_summary": "Update the greeting",
         "changed_files": ["app.py"],
         "patch": "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-print('hello')\n+print('hi')",
+        "code_generation_status": "generated",
+        "code_generation_error": "",
         "execution_log": ["llm_code_writer"],
     }
 
@@ -85,6 +90,15 @@ def fake_branch_preparer(state: AgentState) -> AgentState:
     }
 
 
+def fake_pr_opener(state: AgentState) -> AgentState:
+    """Return a fake URL so this test can never push to GitHub."""
+    return {
+        "pr_status": "created",
+        "pr_url": "https://github.com/example/project/pull/123",
+        "execution_log": ["github_pr_opener"],
+    }
+
+
 def test_llm_graph_accepts_fake_llm_nodes(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("print('hello')", encoding="utf-8")
     graph = build_llm_graph(
@@ -95,6 +109,7 @@ def test_llm_graph_accepts_fake_llm_nodes(tmp_path: Path) -> None:
         test_runner_node=fake_test_runner,
         approval_node=fake_human_approval,
         branch_preparer_node=fake_branch_preparer,
+        pr_opener_node=fake_pr_opener,
     )
     result = graph.invoke(
         {
@@ -127,4 +142,51 @@ def test_llm_graph_accepts_fake_llm_nodes(tmp_path: Path) -> None:
         "repository_indexer",
     ]
     assert result["execution_log"][2] == "llm_code_reader"
-    assert result["pr_url"].endswith("(simulated)")
+    assert result["pr_url"] == "https://github.com/example/project/pull/123"
+    assert result["pr_status"] == "created"
+
+
+def test_rejection_feedback_loops_back_to_code_writer(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("print('hello')", encoding="utf-8")
+    graph = build_llm_graph(
+        planner_node=fake_planner,
+        code_reader_node=fake_code_reader,
+        code_writer_node=fake_code_writer,
+        test_writer_node=fake_test_writer,
+        test_runner_node=fake_test_runner,
+        branch_preparer_node=fake_branch_preparer,
+        pr_opener_node=fake_pr_opener,
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "revision-loop-test"}}
+
+    first_review = graph.invoke(
+        {
+            "issue": "Fix the login button",
+            "repo_path": str(tmp_path),
+            "workflow_thread_id": "revision-loop-test",
+            "execution_log": [],
+        },
+        config=config,
+    )
+    assert first_review["__interrupt__"][0].value["revision_count"] == 0
+
+    second_review = graph.invoke(
+        Command(
+            resume={
+                "decision": "reject",
+                "feedback": "Make the patch smaller.",
+            }
+        ),
+        config=config,
+    )
+    assert second_review["__interrupt__"][0].value["revision_count"] == 1
+    assert second_review["execution_log"].count("llm_code_writer") == 2
+    assert second_review["execution_log"].count("sandbox_test_runner") == 2
+
+    final = graph.invoke(
+        Command(resume={"decision": "approve", "feedback": ""}),
+        config=config,
+    )
+    assert final["approval_status"] == "approved"
+    assert final["pr_status"] == "created"
